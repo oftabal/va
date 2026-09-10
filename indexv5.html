@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pre-op IOL Simulator V5</title>
+<style>
+:root{--bg:#fff;--fg:#111;--muted:#6b6b6b;--card:#f5f5f6;--line:#dedede;--g:#2d8a47;--y:#a87800;--r:#b53d3d}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:14px}
+.wrap{max-width:900px;margin:auto;padding-bottom:40px}.card{background:var(--card);border-radius:18px;padding:15px;margin:12px 0}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}label,small,.note{color:var(--muted)}
+select,input,button{font:inherit;border:1px solid var(--line);border-radius:12px;background:#fff;padding:10px 11px;color:#111}
+input{width:100px}.primary{background:#111;color:#fff}.big{font-size:20px;font-weight:700}
+.profile{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}.profile .p{background:#fff;border:1px solid var(--line);border-radius:12px;padding:9px;text-align:center}
+.grid{display:grid;grid-template-columns:90px repeat(2,minmax(120px,1fr)) 110px;gap:6px;margin-top:12px}
+.cell{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;text-align:center;font-size:13px}.head{font-weight:700;background:#ececee}
+.good{background:#eaf6ed}.same{background:#fff4d9}.bad{background:#fbeae9}.badge{font-weight:700}
+canvas{width:100%;height:300px;background:#fff;border-radius:16px;border:1px solid var(--line)}
+.note{font-size:12px;line-height:1.5}
+</style>
+</head>
+<body><div class="wrap">
+<h1>PRE-OP IOL Simulator <small>V5</small></h1>
+<div class="note">Reálný funkční profil oka → porovnání s plánovanou IOL.</div>
+
+<div class="card">
+<div class="big">1. Současné fakické oko</div>
+<div class="row" style="margin-top:12px">
+<div><label>Věk</label><br><input id="age" type="number" value="46"></div>
+<div><label>Sféra [D]</label><br><input id="preSph" type="number" step="0.25" value="-1.25"></div>
+<div><label>Cylindr [D]</label><br><input id="preCyl" type="number" step="0.25" value="0"></div>
+</div>
+<div style="margin-top:14px"><b>Reálný decimal VA bez korekce</b></div>
+<div class="profile">
+<div class="p"><b>40 cm</b><input id="va40" type="number" step="0.05" value="0.8"></div>
+<div class="p"><b>50 cm</b><input id="va50" type="number" step="0.05" value="0.9"></div>
+<div class="p"><b>60 cm</b><input id="va60" type="number" step="0.05" value="0.8"></div>
+<div class="p"><b>80 cm</b><input id="va80" type="number" step="0.05" value="0.6"></div>
+<div class="p"><b>100 cm</b><input id="va100" type="number" step="0.05" value="0.4"></div>
+</div>
+<div class="note">Tyto hodnoty jsou hlavní reference. Přepiš je podle toho, co skutečně přečteš.</div>
+</div>
+
+<div class="card">
+<div class="big">2. Plánovaná implantace</div>
+<div class="row" style="margin-top:12px">
+<div><label>IOL</label><br><select id="iol">
+<option value="mono">Standard monofocal</option><option value="eyhance">TECNIS Eyhance</option>
+<option value="aspire" selected>enVista Aspire</option><option value="vivity">AcrySof IQ Vivity</option>
+<option value="puresee">TECNIS PureSee</option></select></div>
+<div><label>Cílová sféra [D]</label><br><input id="targetSph" type="number" step="0.25" value="-0.25"></div>
+<div><label>Reziduální cyl [D]</label><br><input id="targetCyl" type="number" step="0.25" value="-0.50"></div>
+<button class="primary" id="simulate">Přepočítat</button>
+</div>
+</div>
+
+<div class="card"><div class="big">3. Porovnání</div><div class="grid" id="table"></div></div>
+<div class="card"><div class="big">4. Funkční profil 40–100 cm</div><canvas id="chart" width="820" height="300"></canvas></div>
+<div class="card"><div class="big">Interpretace</div><div id="interpretation"></div></div>
+
+<script>
+const distances=[40,50,60,80,100],$=id=>document.getElementById(id),clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const se=(s,c)=>+s+(+c)/2;
+const profiles={
+ mono:{name:"Standard monofocal",pts:{40:.18,50:.24,60:.34,80:.50,100:.65}},
+ eyhance:{name:"TECNIS Eyhance",pts:{40:.28,50:.38,60:.52,80:.72,100:.82}},
+ aspire:{name:"enVista Aspire",pts:{40:.30,50:.42,60:.58,80:.78,100:.88}},
+ vivity:{name:"AcrySof IQ Vivity",pts:{40:.38,50:.52,60:.68,80:.84,100:.92}},
+ puresee:{name:"TECNIS PureSee",pts:{40:.44,50:.58,60:.72,80:.87,100:.94}}
+};
+function logmar(dec){return -Math.log10(clamp(dec,.05,2))}
+function decimal(lm){return clamp(Math.pow(10,-lm),.05,1.5)}
+function currentVA(cm){return clamp(+$("va"+cm).value||.05,.05,1.5)}
+function cylPenaltyLogmar(c){return Math.max(0,Math.abs(+c||0)-.25)*0.10}
+function vergence(cm){return 100/cm}
+function pseudoVA(cm){
+ const p=profiles[$("iol").value],targetSE=se($("targetSph").value,$("targetCyl").value);
+ const ev=Math.max(.05,vergence(cm)+targetSE),eff=100/ev,xs=distances,ys=xs.map(d=>p.pts[d]);let va;
+ if(eff<=40)va=ys[0];
+ else if(eff>=100){const t=clamp((eff-100)/300,0,1);va=ys[4]*(1-t)+1.0*t}
+ else for(let i=0;i<xs.length-1;i++)if(eff>=xs[i]&&eff<=xs[i+1]){const t=(eff-xs[i])/(xs[i+1]-xs[i]);va=ys[i]*(1-t)+ys[i+1]*t;break}
+ return decimal(logmar(va)+cylPenaltyLogmar($("targetCyl").value));
+}
+function classify(a,b){const diff=logmar(a)-logmar(b);return diff>.10?["good","LEPŠÍ"]:diff<-.10?["bad","HORŠÍ"]:["same","PODOBNÉ"]}
+function render(){
+ const p=profiles[$("iol").value];let rows='<div class="cell head">Vzdál.</div><div class="cell head">Dnes reálně</div><div class="cell head">'+p.name+'</div><div class="cell head">Změna</div>',data=[];
+ distances.forEach(cm=>{const a=currentVA(cm),b=pseudoVA(cm),cl=classify(a,b);data.push({cm,a,b});
+ rows+=`<div class="cell head">${cm} cm</div><div class="cell">dec. ${a.toFixed(2)}</div><div class="cell ${cl[0]}">dec. ${b.toFixed(2)}</div><div class="cell ${cl[0]}"><span class="badge">${cl[1]}</span></div>`});
+ $("table").innerHTML=rows;
+ const better=data.filter(x=>logmar(x.a)-logmar(x.b)>.10).map(x=>x.cm),worse=data.filter(x=>logmar(x.a)-logmar(x.b)<-.10).map(x=>x.cm);
+ let txt=''; if(better.length)txt+='Lepší očekávaná funkce: <b>'+better.join(", ")+' cm</b>. ';
+ if(worse.length)txt+='Horší než dnešní oko: <b>'+worse.join(", ")+' cm</b>. ';
+ if(currentVA(100)<pseudoVA(100))txt+='V5 respektuje, že tvoje fakické −1,25 D může mít reálně na 1 m horší VA než Aspire; samotná sféra už neurčuje výsledek.';
+ $("interpretation").innerHTML=txt; draw(data);
+}
+function draw(data){
+ const c=$("chart"),ctx=c.getContext("2d"),W=c.width,H=c.height,pad=42;ctx.clearRect(0,0,W,H);
+ ctx.strokeStyle="#bbb";ctx.beginPath();ctx.moveTo(pad,15);ctx.lineTo(pad,H-pad);ctx.lineTo(W-15,H-pad);ctx.stroke();
+ const xs=data.map((_,i)=>pad+i*((W-pad-25)/(data.length-1)));
+ function line(key,dash){ctx.beginPath();ctx.setLineDash(dash);data.forEach((d,i)=>{const y=H-pad-(clamp(d[key],0,1.25)/1.25)*(H-pad-22);i?ctx.lineTo(xs[i],y):ctx.moveTo(xs[i],y)});ctx.strokeStyle="#111";ctx.lineWidth=3;ctx.stroke();ctx.setLineDash([])}
+ line("a",[7,5]);line("b",[]);ctx.font="12px sans-serif";ctx.fillStyle="#666";data.forEach((d,i)=>ctx.fillText(d.cm+" cm",xs[i]-15,H-10));
+}
+$("simulate").onclick=render;
+["preSph","preCyl","iol","targetSph","targetCyl","va40","va50","va60","va80","va100"].forEach(id=>$(id).addEventListener("change",render));
+render();
+</script>
+</div></body></html>
